@@ -4,7 +4,6 @@
     {
       "parameters": {
         "path": "generate-assignment",
-        "responseMode": "responseNode",
         "formTitle": "Academic Assignment Generator",
         "formDescription": "Upload your assignment brief (PDF, DOCX, or TXT) to generate a distinction-level academic assignment.",
         "formFields": {
@@ -277,28 +276,15 @@
     },
     {
       "parameters": {
-        "respondWith": "binary",
-        "responseBody": "={{ $json }}",
-        "options": {
-          "responseHeaders": {
-            "entries": [
-              {
-                "name": "Content-Disposition",
-                "value": "=attachment; filename=\"{{ $json.fileName }}\""
-              },
-              {
-                "name": "Content-Type",
-                "value": "text/html; charset=utf-8"
-              }
-            ]
-          }
-        },
-        "inputDataFieldName": "data"
+        "pageType": "completionPage",
+        "completionTitle": "✅ Your Assignment is Ready!",
+        "completionMessage": "=Your distinction-level assignment **{{ $json.title || 'Assignment' }}** has been successfully generated and is available for download.",
+        "options": {}
       },
-      "id": "node-respond-webhook",
-      "name": "Respond With HTML File",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
+      "id": "node-form-completion",
+      "name": "Form Completion",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
       "position": [3540, 500]
     },
     {
@@ -442,7 +428,7 @@
       "main": [[{"node": "Validation Chain", "type": "main", "index": 0}]]
     },
     "Generate HTML Document": {
-      "main": [[{"node": "Respond With HTML File", "type": "main", "index": 0}]]
+      "main": [[{"node": "Form Completion", "type": "main", "index": 0}]]
     },
     "Anthropic: Brief Extraction & Requirement Intelligence": {
       "ai_languageModel": [[{"node": "Brief Extraction Chain", "type": "ai_languageModel", "index": 0}]]
