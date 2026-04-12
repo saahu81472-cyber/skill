@@ -1,0 +1,605 @@
+{
+  "name": "Academic Assignment Generator (Autonomous Distinction Engine)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-assignment",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "node-webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "webhookId": "academic-assignment-generator"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Consolidate extracted text from any upload format (PDF, DOCX, TXT)\nconst items = $input.all();\nlet briefText = '';\n\nfor (const item of items) {\n  if (item.json.text) {\n    briefText += item.json.text;\n  } else if (item.json.data) {\n    briefText += item.json.data;\n  } else if (typeof item.json === 'string') {\n    briefText += item.json;\n  }\n}\n\n// Fallback: if text extraction from binary failed, try raw body\nif (!briefText && items[0]?.json?.body) {\n  briefText = typeof items[0].json.body === 'string'\n    ? items[0].json.body\n    : JSON.stringify(items[0].json.body);\n}\n\nif (!briefText || briefText.trim().length < 20) {\n  throw new Error(\n    'ERROR: No valid assignment brief detected. Please upload your assignment brief as PDF, DOCX, or TXT.'\n  );\n}\n\nreturn [{\n  json: {\n    briefText: briefText.trim(),\n    uploadTimestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-consolidate-text",
+      "name": "Consolidate Brief Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are an expert academic brief analyst. Your task is to extract every requirement from the following assignment brief with surgical precision.\n\n--- ASSIGNMENT BRIEF START ---\n{{ $json.briefText }}\n--- ASSIGNMENT BRIEF END ---\n\nPerform the following extraction and return ONLY valid JSON (no markdown, no explanation):\n\n{\n  \"wordCount\": <number or null>,\n  \"referencingStyle\": \"<string e.g. Harvard Cite Them Right, APA 7th, etc. or null>\",\n  \"academicLevel\": \"<UG / PG / MSc / PhD or best estimate>\",\n  \"subjectArea\": \"<string>\",\n  \"tasks\": [\n    {\n      \"taskNumber\": <number>,\n      \"taskDescription\": \"<exact wording from brief>\",\n      \"commandVerbs\": [\"<e.g. evaluate, analyse, discuss>\"],\n      \"markWeight\": <percentage or null>,\n      \"suggestedWordAllocation\": <number or null>\n    }\n  ],\n  \"markingCriteria\": [\n    {\n      \"criterion\": \"<string>\",\n      \"weight\": <percentage or null>,\n      \"descriptors\": \"<string summary of what distinction level requires>\"\n    }\n  ],\n  \"explicitRequirements\": [\"<list of all explicit instructions>\"],\n  \"hiddenExpectations\": [\"<inferred expectations not explicitly stated but expected at distinction level>\"],\n  \"requiredTheoriesModels\": [\"<theories, frameworks, models relevant to the tasks>\"],\n  \"keyTermsToDefine\": [\"<terms that should be defined or explored>\"],\n  \"submissionFormat\": \"<essay / report / presentation / portfolio or null>\",\n  \"specialInstructions\": [\"<any other specific instructions>\"]\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.1,
+          "maxTokens": 4096
+        }
+      },
+      "id": "node-anthropic-extract",
+      "name": "Anthropic: Brief Extraction & Requirement Intelligence",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        900,
+        300
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-credentials",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the Anthropic extraction response into structured JSON\nconst rawResponse = $input.first().json.message?.content\n  || $input.first().json.response\n  || $input.first().json.text\n  || '';\n\nlet extracted;\ntry {\n  // Try to extract JSON from the response (handle markdown code blocks)\n  const jsonMatch = rawResponse.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    extracted = JSON.parse(jsonMatch[0]);\n  } else {\n    throw new Error('No JSON found in response');\n  }\n} catch (e) {\n  throw new Error(`Failed to parse brief extraction: ${e.message}. Raw: ${rawResponse.substring(0, 500)}`);\n}\n\n// Validate required fields\nif (!extracted.tasks || extracted.tasks.length === 0) {\n  throw new Error('No tasks were extracted from the assignment brief. Please check the uploaded document.');\n}\n\n// Calculate word allocations if not provided\nconst totalWordCount = extracted.wordCount || 3000;\nconst totalWeight = extracted.tasks.reduce((sum, t) => sum + (t.markWeight || 0), 0);\n\nif (totalWeight > 0) {\n  extracted.tasks = extracted.tasks.map(t => ({\n    ...t,\n    suggestedWordAllocation: t.suggestedWordAllocation\n      || Math.round((t.markWeight / totalWeight) * totalWordCount)\n  }));\n} else {\n  const perTask = Math.round(totalWordCount / extracted.tasks.length);\n  extracted.tasks = extracted.tasks.map(t => ({\n    ...t,\n    suggestedWordAllocation: t.suggestedWordAllocation || perTask\n  }));\n}\n\nreturn [{\n  json: {\n    briefText: $('Consolidate Brief Text').first().json.briefText,\n    extraction: extracted\n  }\n}];"
+      },
+      "id": "node-parse-extraction",
+      "name": "Parse & Validate Extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an elite academic structure architect. You generate assignment structures that are STRICTLY derived from the assignment brief. You NEVER use generic or template-based headings.\n\nCRITICAL RULES:\n- Sections MUST be derived ONLY from the assignment tasks/questions\n- Headings MUST reflect the brief wording directly\n- NO generic sections (Introduction, Conclusion, Literature Review, Analysis, Discussion) UNLESS the brief EXPLICITLY requires them\n- No template-based structure\n- Word allocation must be based on task weight/marks\n\nFor each section heading:\n- Use the command verbs from the brief (evaluate \u2192 \"Critical Evaluation of...\")\n- Mirror the language of the brief\n- Ensure each heading directly addresses a specific task requirement"
+            },
+            {
+              "role": "user",
+              "content": "=Based on the following extracted requirements, generate the assignment structure.\n\nEXTRACTED REQUIREMENTS:\n{{ JSON.stringify($json.extraction, null, 2) }}\n\nORIGINAL BRIEF TEXT:\n{{ $json.briefText }}\n\nGenerate a JSON structure with the following format (return ONLY valid JSON):\n\n{\n  \"title\": \"<assignment title from brief>\",\n  \"sections\": [\n    {\n      \"sectionNumber\": <number>,\n      \"heading\": \"<derived from brief task wording \u2014 NOT generic>\",\n      \"taskReference\": \"<which task(s) this addresses>\",\n      \"wordAllocation\": <number>,\n      \"commandVerbs\": [\"<verbs to guide writing depth>\"],\n      \"keyContentPoints\": [\n        \"<specific points to cover>\"\n      ],\n      \"theoriesModelsToApply\": [\"<relevant theories>\"],\n      \"criticalAnalysisAngle\": \"<how to approach critical analysis for this section>\",\n      \"evidenceRequirements\": \"<type and minimum number of sources needed>\"\n    }\n  ],\n  \"totalWordCount\": <number>,\n  \"referencingStyle\": \"<style>\",\n  \"includesCoverPage\": true,\n  \"includesTableOfContents\": true,\n  \"includesReferences\": true\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.2,
+          "maxTokens": 4096
+        }
+      },
+      "id": "node-openai-structure",
+      "name": "OpenAI: Structure Generation",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1340,
+        300
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the structure generation response\nconst rawResponse = $input.first().json.message?.content\n  || $input.first().json.response\n  || $input.first().json.text\n  || '';\n\nlet structure;\ntry {\n  const jsonMatch = rawResponse.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    structure = JSON.parse(jsonMatch[0]);\n  } else {\n    throw new Error('No JSON found in structure response');\n  }\n} catch (e) {\n  throw new Error(`Failed to parse structure: ${e.message}`);\n}\n\n// Validate no generic sections were included unless explicitly required\nconst genericHeadings = ['introduction', 'conclusion', 'literature review', 'analysis', 'discussion'];\nconst extraction = $('Parse & Validate Extraction').first().json.extraction;\nconst briefText = $('Consolidate Brief Text').first().json.briefText.toLowerCase();\n\nconst filteredSections = structure.sections.filter(section => {\n  const headingLower = section.heading.toLowerCase();\n  const isGeneric = genericHeadings.some(g => headingLower === g || headingLower === `${g} section`);\n\n  if (isGeneric) {\n    // Check if the brief explicitly requires this section\n    const briefRequiresIt = extraction.explicitRequirements?.some(\n      r => r.toLowerCase().includes(headingLower)\n    ) || briefText.includes(headingLower);\n\n    return briefRequiresIt;\n  }\n  return true;\n});\n\nstructure.sections = filteredSections;\n\nreturn [{\n  json: {\n    briefText: $('Consolidate Brief Text').first().json.briefText,\n    extraction: extraction,\n    structure: structure\n  }\n}];"
+      },
+      "id": "node-validate-structure",
+      "name": "Validate Structure (No Generic Sections)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a world-class academic writer producing distinction-level work. You write with:\n- Deep critical analysis (not description)\n- Every paragraph follows: Claim \u2192 Evidence (citation) \u2192 Critical Analysis \u2192 Link back to task\n- Formal academic tone\n- MSc-level depth and sophistication\n- Varied sentence structure\n- Real, verifiable academic sources (minimum 70% peer-reviewed)\n- No fluff, no filler, no generic statements\n- No AI-detectable patterns\n\nCRITICAL: Each section must directly address the specific task from the assignment brief. Do NOT add generic content. Every sentence must serve the argument.\n\nREFERENCING: Use the specified referencing style consistently. All citations must be realistic and verifiable. Include author surnames, year, and page numbers where applicable.\n\nWRITING QUALITY:\n- Use hedging language appropriately (\"arguably\", \"it could be contended that\")\n- Employ sophisticated connectives and transitions\n- Demonstrate synthesis of multiple sources\n- Show original critical thinking, not just source summation\n- Maintain a clear argumentative thread throughout"
+            },
+            {
+              "role": "user",
+              "content": "=Write the COMPLETE assignment content based on the structure below. Write EVERY section in full.\n\nASSIGNMENT STRUCTURE:\n{{ JSON.stringify($json.structure, null, 2) }}\n\nEXTRACTED REQUIREMENTS:\n{{ JSON.stringify($json.extraction, null, 2) }}\n\nORIGINAL BRIEF:\n{{ $json.briefText }}\n\nINSTRUCTIONS:\n1. Write each section completely according to its word allocation\n2. Follow the paragraph structure: Claim \u2192 Evidence \u2192 Critical Analysis \u2192 Link to task\n3. Use the referencing style: {{ $json.extraction.referencingStyle || 'Harvard Cite Them Right' }}\n4. Include in-text citations throughout\n5. Maintain context continuity between sections\n6. Avoid repetition across sections\n7. End with a comprehensive reference list\n\nReturn the output as JSON with this format:\n{\n  \"sections\": [\n    {\n      \"heading\": \"<section heading>\",\n      \"content\": \"<full section content with in-text citations>\"\n    }\n  ],\n  \"references\": [\n    \"<full reference entry>\"\n  ]\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.6,
+          "maxTokens": 16384
+        }
+      },
+      "id": "node-openai-write",
+      "name": "OpenAI: Section Writing Engine",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1780,
+        300
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the written content\nconst rawResponse = $input.first().json.message?.content\n  || $input.first().json.response\n  || $input.first().json.text\n  || '';\n\nlet writtenContent;\ntry {\n  const jsonMatch = rawResponse.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    writtenContent = JSON.parse(jsonMatch[0]);\n  } else {\n    // If not JSON, treat the entire response as content\n    writtenContent = {\n      sections: [{ heading: 'Assignment Content', content: rawResponse }],\n      references: []\n    };\n  }\n} catch (e) {\n  // Fallback: use raw text\n  writtenContent = {\n    sections: [{ heading: 'Assignment Content', content: rawResponse }],\n    references: []\n  };\n}\n\nreturn [{\n  json: {\n    briefText: $('Consolidate Brief Text').first().json.briefText,\n    extraction: $('Parse & Validate Extraction').first().json.extraction,\n    structure: $('Validate Structure (No Generic Sections)').first().json.structure,\n    writtenContent: writtenContent\n  }\n}];"
+      },
+      "id": "node-parse-written",
+      "name": "Parse Written Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are a senior academic editor and humanisation specialist. Your task is to enhance the following academic assignment to distinction level while removing all AI-detectable patterns.\n\nORIGINAL BRIEF:\n{{ $json.briefText }}\n\nEXTRACTED REQUIREMENTS:\n{{ JSON.stringify($json.extraction, null, 2) }}\n\nWRITTEN CONTENT:\n{{ JSON.stringify($json.writtenContent, null, 2) }}\n\nPERFORM THE FOLLOWING ENHANCEMENTS:\n\n1. CRITICAL ANALYSIS ENHANCEMENT:\n   - Deepen critical evaluation where command verbs demand it\n   - Add counterarguments and alternative perspectives\n   - Strengthen the argumentative thread\n   - Ensure synthesis of sources (not just sequential referencing)\n\n2. HUMANISATION:\n   - Vary sentence length (mix of short, medium, and long)\n   - Use natural academic phrasing (not robotic or formulaic)\n   - Add occasional rhetorical questions where appropriate\n   - Use discipline-specific vocabulary naturally\n   - Remove any repetitive transition patterns\n   - Ensure the writing feels like an experienced academic wrote it\n\n3. CONTEXT CONTINUITY:\n   - Ensure logical flow between sections\n   - Remove any repetition across sections\n   - Strengthen connections between arguments\n\n4. REFERENCING CHECK:\n   - Ensure all citations are properly formatted\n   - Verify minimum 70% peer-reviewed sources\n   - Add any missing sources where claims need support\n\nReturn the enhanced content as JSON:\n{\n  \"sections\": [\n    {\n      \"heading\": \"<section heading>\",\n      \"content\": \"<enhanced section content>\"\n    }\n  ],\n  \"references\": [\n    \"<full reference entry>\"\n  ],\n  \"enhancementNotes\": [\n    \"<what was improved and why>\"\n  ]\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.5,
+          "maxTokens": 16384
+        }
+      },
+      "id": "node-anthropic-enhance",
+      "name": "Anthropic: Critical Analysis Enhancement & Humanisation",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        2220,
+        300
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-credentials",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the enhanced content from Anthropic\nconst rawResponse = $input.first().json.message?.content\n  || $input.first().json.response\n  || $input.first().json.text\n  || '';\n\nlet enhancedContent;\ntry {\n  const jsonMatch = rawResponse.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    enhancedContent = JSON.parse(jsonMatch[0]);\n  } else {\n    enhancedContent = $('Parse Written Content').first().json.writtenContent;\n  }\n} catch (e) {\n  enhancedContent = $('Parse Written Content').first().json.writtenContent;\n}\n\nreturn [{\n  json: {\n    briefText: $('Consolidate Brief Text').first().json.briefText,\n    extraction: $('Parse & Validate Extraction').first().json.extraction,\n    structure: $('Validate Structure (No Generic Sections)').first().json.structure,\n    enhancedContent: enhancedContent\n  }\n}];"
+      },
+      "id": "node-parse-enhanced",
+      "name": "Parse Enhanced Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an academic quality assurance validator. You rigorously check assignments against their briefs to ensure distinction-level quality. You are brutally honest and precise."
+            },
+            {
+              "role": "user",
+              "content": "=Validate the following assignment against the original brief and requirements.\n\nORIGINAL BRIEF:\n{{ $json.briefText }}\n\nEXTRACTED REQUIREMENTS:\n{{ JSON.stringify($json.extraction, null, 2) }}\n\nASSIGNMENT CONTENT:\n{{ JSON.stringify($json.enhancedContent, null, 2) }}\n\nVALIDATION CHECKLIST \u2014 check each item and report:\n\n1. TASK COVERAGE: Are ALL tasks from the brief fully addressed?\n2. GENERIC SECTIONS: Are there any generic sections that shouldn't be there?\n3. COMMAND VERB ALIGNMENT: Does the depth match the command verbs (evaluate = critical analysis, not description)?\n4. CRITICAL ANALYSIS: Is there genuine critical analysis in every section?\n5. REFERENCING: Are citations properly formatted and sufficient?\n6. WORD COUNT: Is the total word count approximately correct?\n7. ACADEMIC LEVEL: Does the writing match the required academic level?\n8. MARKING CRITERIA: Does the content address all marking criteria?\n9. COHERENCE: Is there logical flow and no repetition?\n10. HUMANISATION: Does the writing sound natural and academic?\n\nReturn JSON:\n{\n  \"overallScore\": <1-100>,\n  \"passesValidation\": <true/false>,\n  \"validationResults\": [\n    {\n      \"criterion\": \"<name>\",\n      \"passed\": <true/false>,\n      \"score\": <1-10>,\n      \"feedback\": \"<specific feedback>\"\n    }\n  ],\n  \"criticalIssues\": [\"<issues that MUST be fixed>\"],\n  \"refinementSuggestions\": [\"<suggestions for improvement>\"],\n  \"requiresRefinement\": <true/false>\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.1,
+          "maxTokens": 4096
+        }
+      },
+      "id": "node-openai-validate",
+      "name": "OpenAI: Validation Engine",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        2660,
+        300
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse validation results and determine if refinement is needed\nconst rawResponse = $input.first().json.message?.content\n  || $input.first().json.response\n  || $input.first().json.text\n  || '';\n\nlet validation;\ntry {\n  const jsonMatch = rawResponse.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    validation = JSON.parse(jsonMatch[0]);\n  } else {\n    validation = { overallScore: 75, passesValidation: true, requiresRefinement: false };\n  }\n} catch (e) {\n  validation = { overallScore: 75, passesValidation: true, requiresRefinement: false };\n}\n\nreturn [{\n  json: {\n    briefText: $('Consolidate Brief Text').first().json.briefText,\n    extraction: $('Parse & Validate Extraction').first().json.extraction,\n    structure: $('Validate Structure (No Generic Sections)').first().json.structure,\n    enhancedContent: $('Parse Enhanced Content').first().json.enhancedContent,\n    validation: validation,\n    requiresRefinement: validation.requiresRefinement === true && validation.overallScore < 80,\n    iterationCount: ($input.first().json.iterationCount || 0) + 1\n  }\n}];"
+      },
+      "id": "node-parse-validation",
+      "name": "Parse Validation Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-refinement",
+              "leftValue": "={{ $json.requiresRefinement }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "condition-max-iterations",
+              "leftValue": "={{ $json.iterationCount }}",
+              "rightValue": 3,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-refinement-check",
+      "name": "Needs Refinement?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are performing auto-refinement on an academic assignment. This is iteration {{ $json.iterationCount }} of maximum 3.\n\nVALIDATION FEEDBACK:\n{{ JSON.stringify($json.validation, null, 2) }}\n\nCURRENT CONTENT:\n{{ JSON.stringify($json.enhancedContent, null, 2) }}\n\nORIGINAL BRIEF:\n{{ $json.briefText }}\n\nCRITICAL ISSUES TO FIX:\n{{ JSON.stringify($json.validation.criticalIssues || [], null, 2) }}\n\nREFINEMENT SUGGESTIONS:\n{{ JSON.stringify($json.validation.refinementSuggestions || [], null, 2) }}\n\nINSTRUCTIONS:\n1. Address ALL critical issues identified\n2. Implement refinement suggestions where they improve quality\n3. Improve clarity, depth, and coherence\n4. Maintain the existing structure (do NOT add generic sections)\n5. Keep word count within the required range\n\nReturn the refined content as JSON:\n{\n  \"sections\": [\n    {\n      \"heading\": \"<section heading>\",\n      \"content\": \"<refined section content>\"\n    }\n  ],\n  \"references\": [\n    \"<full reference entry>\"\n  ],\n  \"refinementChanges\": [\"<what was changed and why>\"]\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.4,
+          "maxTokens": 16384
+        }
+      },
+      "id": "node-anthropic-refine",
+      "name": "Anthropic: Auto-Refinement",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        3320,
+        100
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-credentials",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse refined content and loop back for re-validation\nconst rawResponse = $input.first().json.message?.content\n  || $input.first().json.response\n  || $input.first().json.text\n  || '';\n\nlet refinedContent;\ntry {\n  const jsonMatch = rawResponse.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    refinedContent = JSON.parse(jsonMatch[0]);\n  } else {\n    refinedContent = $('Parse Enhanced Content').first().json.enhancedContent;\n  }\n} catch (e) {\n  refinedContent = $('Parse Enhanced Content').first().json.enhancedContent;\n}\n\nreturn [{\n  json: {\n    briefText: $input.first().json.briefText,\n    extraction: $input.first().json.extraction,\n    structure: $input.first().json.structure,\n    enhancedContent: refinedContent,\n    iterationCount: $input.first().json.iterationCount\n  }\n}];"
+      },
+      "id": "node-parse-refined",
+      "name": "Parse Refined Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3540,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate the final HTML document for download\nconst data = $input.first().json;\nconst content = data.enhancedContent;\nconst extraction = data.extraction;\nconst structure = data.structure;\nconst validation = data.validation;\n\nconst title = structure?.title || extraction?.subjectArea || 'Academic Assignment';\nconst refStyle = extraction?.referencingStyle || 'Harvard';\nconst academicLevel = extraction?.academicLevel || 'MSc';\nconst wordCount = structure?.totalWordCount || extraction?.wordCount || 'N/A';\n\n// Build sections HTML\nlet sectionsHtml = '';\nconst sections = content?.sections || [];\nfor (let i = 0; i < sections.length; i++) {\n  const section = sections[i];\n  const heading = section.heading || `Section ${i + 1}`;\n  // Convert newlines to paragraphs\n  const paragraphs = (section.content || '')\n    .split(/\\n\\n+/)\n    .filter(p => p.trim())\n    .map(p => `<p>${p.trim()}</p>`)\n    .join('\\n');\n\n  sectionsHtml += `\n    <div class=\"section\">\n      <h2>${i + 1}. ${heading}</h2>\n      ${paragraphs}\n    </div>`;\n}\n\n// Build references HTML\nlet referencesHtml = '';\nconst references = content?.references || [];\nif (references.length > 0) {\n  referencesHtml = `\n    <div class=\"section references\">\n      <h2>References</h2>\n      <div class=\"reference-list\">\n        ${references.map(r => `<p class=\"reference-entry\">${r}</p>`).join('\\n')}\n      </div>\n    </div>`;\n}\n\n// Build validation summary\nlet validationHtml = '';\nif (validation) {\n  validationHtml = `\n    <div class=\"validation-summary\">\n      <p><strong>Quality Score:</strong> ${validation.overallScore || 'N/A'}/100</p>\n      <p><strong>Iterations:</strong> ${data.iterationCount || 1}</p>\n    </div>`;\n}\n\nconst html = `<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>${title}</title>\n  <style>\n    @page {\n      size: A4;\n      margin: 2.54cm;\n    }\n    * {\n      margin: 0;\n      padding: 0;\n      box-sizing: border-box;\n    }\n    body {\n      font-family: 'Times New Roman', 'Georgia', serif;\n      font-size: 12pt;\n      line-height: 2;\n      color: #1a1a1a;\n      background: #ffffff;\n      max-width: 210mm;\n      margin: 0 auto;\n      padding: 2.54cm;\n    }\n    .cover-page {\n      display: flex;\n      flex-direction: column;\n      justify-content: center;\n      align-items: center;\n      min-height: 80vh;\n      text-align: center;\n      page-break-after: always;\n      border-bottom: 3px double #2c3e50;\n      padding-bottom: 40px;\n    }\n    .cover-page h1 {\n      font-size: 24pt;\n      font-weight: bold;\n      color: #2c3e50;\n      margin-bottom: 30px;\n      line-height: 1.3;\n      max-width: 80%;\n    }\n    .cover-meta {\n      font-size: 14pt;\n      color: #555;\n      margin-top: 20px;\n    }\n    .cover-meta p {\n      margin: 8px 0;\n    }\n    .toc {\n      page-break-after: always;\n      padding: 40px 0;\n    }\n    .toc h2 {\n      font-size: 18pt;\n      color: #2c3e50;\n      border-bottom: 2px solid #2c3e50;\n      padding-bottom: 10px;\n      margin-bottom: 25px;\n    }\n    .toc ul {\n      list-style: none;\n      padding: 0;\n    }\n    .toc li {\n      padding: 8px 0;\n      border-bottom: 1px dotted #ccc;\n      font-size: 12pt;\n    }\n    .toc li a {\n      text-decoration: none;\n      color: #2c3e50;\n    }\n    .section {\n      margin-bottom: 30px;\n      page-break-inside: avoid;\n    }\n    .section h2 {\n      font-size: 16pt;\n      color: #2c3e50;\n      margin-bottom: 15px;\n      margin-top: 30px;\n      border-bottom: 1px solid #ddd;\n      padding-bottom: 8px;\n    }\n    .section p {\n      text-align: justify;\n      margin-bottom: 12px;\n      text-indent: 0;\n    }\n    .references {\n      page-break-before: always;\n    }\n    .reference-list {\n      padding-left: 0;\n    }\n    .reference-entry {\n      margin-bottom: 10px;\n      padding-left: 40px;\n      text-indent: -40px;\n      line-height: 1.8;\n      font-size: 11pt;\n    }\n    .validation-summary {\n      margin-top: 40px;\n      padding: 15px;\n      background: #f8f9fa;\n      border: 1px solid #dee2e6;\n      border-radius: 4px;\n      font-size: 10pt;\n      color: #666;\n    }\n    @media print {\n      body {\n        padding: 0;\n      }\n      .validation-summary {\n        display: none;\n      }\n    }\n  </style>\n</head>\n<body>\n\n  <!-- Cover Page -->\n  <div class=\"cover-page\">\n    <h1>${title}</h1>\n    <div class=\"cover-meta\">\n      <p><strong>Academic Level:</strong> ${academicLevel}</p>\n      <p><strong>Referencing Style:</strong> ${refStyle}</p>\n      <p><strong>Word Count:</strong> ${wordCount}</p>\n      <p><strong>Date:</strong> ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</p>\n    </div>\n  </div>\n\n  <!-- Table of Contents -->\n  <div class=\"toc\">\n    <h2>Table of Contents</h2>\n    <ul>\n      ${sections.map((s, i) => `<li>${i + 1}. ${s.heading || 'Section ' + (i + 1)}</li>`).join('\\n      ')}\n      ${references.length > 0 ? '<li>References</li>' : ''}\n    </ul>\n  </div>\n\n  <!-- Main Content -->\n  ${sectionsHtml}\n\n  <!-- References -->\n  ${referencesHtml}\n\n  <!-- Validation Summary (hidden on print) -->\n  ${validationHtml}\n\n</body>\n</html>`;\n\n// Convert to binary buffer for download\nconst buffer = Buffer.from(html, 'utf-8');\nconst fileName = title.replace(/[^a-zA-Z0-9\\s]/g, '').replace(/\\s+/g, '_').substring(0, 60) + '.html';\n\nreturn [{\n  json: {\n    title: title,\n    fileName: fileName,\n    validationScore: validation?.overallScore || 'N/A',\n    iterationCount: data.iterationCount || 1,\n    sectionsCount: sections.length,\n    referencesCount: references.length\n  },\n  binary: {\n    data: {\n      data: buffer.toString('base64'),\n      mimeType: 'text/html',\n      fileName: fileName,\n      fileExtension: 'html'\n    }\n  }\n}];"
+      },
+      "id": "node-generate-html",
+      "name": "Generate HTML Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3320,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "binary",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Disposition",
+                "value": "=attachment; filename=\"{{ $json.fileName }}\""
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        },
+        "inputDataFieldName": "data"
+      },
+      "id": "node-respond-webhook",
+      "name": "Respond With HTML File",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3540,
+        500
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Consolidate Brief Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidate Brief Text": {
+      "main": [
+        [
+          {
+            "node": "Anthropic: Brief Extraction & Requirement Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic: Brief Extraction & Requirement Intelligence": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate Extraction": {
+      "main": [
+        [
+          {
+            "node": "OpenAI: Structure Generation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI: Structure Generation": {
+      "main": [
+        [
+          {
+            "node": "Validate Structure (No Generic Sections)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Structure (No Generic Sections)": {
+      "main": [
+        [
+          {
+            "node": "OpenAI: Section Writing Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI: Section Writing Engine": {
+      "main": [
+        [
+          {
+            "node": "Parse Written Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Written Content": {
+      "main": [
+        [
+          {
+            "node": "Anthropic: Critical Analysis Enhancement & Humanisation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic: Critical Analysis Enhancement & Humanisation": {
+      "main": [
+        [
+          {
+            "node": "Parse Enhanced Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Enhanced Content": {
+      "main": [
+        [
+          {
+            "node": "OpenAI: Validation Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI: Validation Engine": {
+      "main": [
+        [
+          {
+            "node": "Parse Validation Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Validation Results": {
+      "main": [
+        [
+          {
+            "node": "Needs Refinement?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Refinement?": {
+      "main": [
+        [
+          {
+            "node": "Anthropic: Auto-Refinement",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate HTML Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic: Auto-Refinement": {
+      "main": [
+        [
+          {
+            "node": "Parse Refined Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Refined Content": {
+      "main": [
+        [
+          {
+            "node": "OpenAI: Validation Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate HTML Document": {
+      "main": [
+        [
+          {
+            "node": "Respond With HTML File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "Academic",
+      "id": "tag-academic"
+    },
+    {
+      "name": "AI",
+      "id": "tag-ai"
+    },
+    {
+      "name": "Assignment Generator",
+      "id": "tag-generator"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-04-12T17:46:53.240Z",
+  "versionId": "1.0.0"
+}
