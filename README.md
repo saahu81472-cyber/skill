@@ -6,7 +6,7 @@
 
 This n8n workflow implements a full AI-powered pipeline that:
 
-1. Accepts an assignment brief (PDF / DOCX / TXT) via webhook
+1. Accepts an assignment brief (PDF / DOCX / TXT) via a built-in web form
 2. Extracts text from uploaded binary files using **Extract From File**
 3. Extracts and analyses all requirements using **Anthropic Claude Sonnet**
 4. Generates a brief-driven structure using **OpenAI GPT-4o** (no generic sections)
@@ -40,20 +40,21 @@ This n8n workflow implements a full AI-powered pipeline that:
 
 ### Usage
 
-Send a POST request to the webhook endpoint with the assignment brief as a file upload:
+1. Activate the workflow in n8n
+2. Open the form URL provided by the Form Trigger node (shown in the node's settings)
+3. Upload your assignment brief (PDF, DOCX, or TXT) using the file upload field
+4. Submit the form and wait for the generated HTML assignment to be returned
 
-```bash
-curl -X POST https://your-n8n-instance/webhook/generate-assignment \
-  -F "data=@assignment_brief.pdf"
+The form is accessible at:
 ```
-
-The response will be a downloadable HTML file containing the completed assignment.
+https://your-n8n-instance/form/generate-assignment
+```
 
 ## Workflow Nodes (24 total)
 
 | # | Node | Engine | Purpose |
 |---|------|--------|---------|
-| 1 | Webhook Trigger | n8n | Receives uploaded assignment brief |
+| 1 | Form Trigger | n8n | Presents a web form for uploading the assignment brief |
 | 2 | Extract From File | n8n | Extracts text from uploaded binary (PDF/DOCX/TXT) |
 | 3 | Consolidate Brief Text | Code | Validates and consolidates extracted text |
 | 4 | Brief Extraction Chain | LangChain LLM Chain | Orchestrates the brief extraction AI call |

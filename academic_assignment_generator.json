@@ -3,17 +3,27 @@
   "nodes": [
     {
       "parameters": {
-        "httpMethod": "POST",
         "path": "generate-assignment",
         "responseMode": "responseNode",
-        "options": {
-          "rawBody": true
-        }
+        "formTitle": "Academic Assignment Generator",
+        "formDescription": "Upload your assignment brief (PDF, DOCX, or TXT) to generate a distinction-level academic assignment.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Assignment Brief",
+              "fieldType": "file",
+              "requiredField": true,
+              "acceptFileTypes": ".pdf,.docx,.txt",
+              "multipleFiles": false
+            }
+          ]
+        },
+        "options": {}
       },
-      "id": "node-webhook-trigger",
-      "name": "Webhook Trigger",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
+      "id": "node-form-trigger",
+      "name": "Form Trigger",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
       "position": [
         220,
         300
@@ -452,7 +462,7 @@
     }
   ],
   "connections": {
-    "Webhook Trigger": {
+    "Form Trigger": {
       "main": [
         [
           {
