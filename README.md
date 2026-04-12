@@ -7,13 +7,14 @@
 This n8n workflow implements a full AI-powered pipeline that:
 
 1. Accepts an assignment brief (PDF / DOCX / TXT) via webhook
-2. Extracts and analyses all requirements using **Anthropic Claude Sonnet**
-3. Generates a brief-driven structure using **OpenAI GPT-4o** (no generic sections)
-4. Writes complete, critically analysed content using **OpenAI GPT-4o**
-5. Enhances and humanises the output using **Anthropic Claude Sonnet**
-6. Validates against the brief using **OpenAI GPT-4o**
-7. Auto-refines up to 3 iterations if quality score < 80
-8. Outputs a downloadable HTML file with cover page, table of contents, content, and references
+2. Extracts text from uploaded binary files using **Extract From File**
+3. Extracts and analyses all requirements using **Anthropic Claude Sonnet**
+4. Generates a brief-driven structure using **OpenAI GPT-4o** (no generic sections)
+5. Writes complete, critically analysed content using **OpenAI GPT-4o**
+6. Enhances and humanises the output using **Anthropic Claude Sonnet**
+7. Validates against the brief using **OpenAI GPT-4o**
+8. Auto-refines up to 3 iterations if quality score < 80
+9. Outputs a downloadable HTML file with cover page, table of contents, content, and references
 
 ## File
 
@@ -48,27 +49,34 @@ curl -X POST https://your-n8n-instance/webhook/generate-assignment \
 
 The response will be a downloadable HTML file containing the completed assignment.
 
-## Workflow Nodes (17 total)
+## Workflow Nodes (24 total)
 
 | # | Node | Engine | Purpose |
 |---|------|--------|---------|
 | 1 | Webhook Trigger | n8n | Receives uploaded assignment brief |
-| 2 | Consolidate Brief Text | Code | Extracts and validates text from upload |
-| 3 | Brief Extraction & Requirement Intelligence | Anthropic Claude | Extracts word count, tasks, marking criteria, hidden expectations |
-| 4 | Parse & Validate Extraction | Code | Parses AI response, calculates word allocations |
-| 5 | Structure Generation | OpenAI GPT-4o | Builds structure strictly from brief (no templates) |
-| 6 | Validate Structure | Code | Filters out any generic sections not in brief |
-| 7 | Section Writing Engine | OpenAI GPT-4o | Writes full content: Claim → Evidence → Analysis → Link |
-| 8 | Parse Written Content | Code | Parses written sections and references |
-| 9 | Critical Analysis Enhancement & Humanisation | Anthropic Claude | Deepens analysis, humanises tone, removes AI patterns |
-| 10 | Parse Enhanced Content | Code | Parses enhanced output |
-| 11 | Validation Engine | OpenAI GPT-4o | 10-point validation against brief |
-| 12 | Parse Validation Results | Code | Determines if refinement needed |
-| 13 | Needs Refinement? | If | Routes to refinement loop or final output |
-| 14 | Auto-Refinement | Anthropic Claude | Fixes critical issues (max 3 iterations) |
-| 15 | Parse Refined Content | Code | Feeds back into validation loop |
-| 16 | Generate HTML Document | Code | Creates styled, print-ready HTML with cover page |
-| 17 | Respond With HTML File | Webhook Response | Returns downloadable HTML binary |
+| 2 | Extract From File | n8n | Extracts text from uploaded binary (PDF/DOCX/TXT) |
+| 3 | Consolidate Brief Text | Code | Validates and consolidates extracted text |
+| 4 | Brief Extraction Chain | LangChain LLM Chain | Orchestrates the brief extraction AI call |
+| 5 | Anthropic: Brief Extraction Model | Anthropic Claude | Model sub-node for brief extraction |
+| 6 | Parse & Validate Extraction | Code | Parses AI response, calculates word allocations |
+| 7 | Structure Generation Chain | LangChain LLM Chain | Orchestrates structure generation AI call |
+| 8 | OpenAI: Structure Generation Model | OpenAI GPT-4o | Model sub-node for structure generation |
+| 9 | Validate Structure | Code | Filters out any generic sections not in brief |
+| 10 | Section Writing Chain | LangChain LLM Chain | Orchestrates the section writing AI call |
+| 11 | OpenAI: Section Writing Model | OpenAI GPT-4o | Model sub-node for section writing |
+| 12 | Parse Written Content | Code | Parses written sections and references |
+| 13 | Critical Analysis Chain | LangChain LLM Chain | Orchestrates the critical analysis AI call |
+| 14 | Anthropic: Critical Analysis Model | Anthropic Claude | Model sub-node for critical analysis |
+| 15 | Parse Enhanced Content | Code | Parses enhanced output |
+| 16 | Validation Chain | LangChain LLM Chain | Orchestrates the validation AI call |
+| 17 | OpenAI: Validation Model | OpenAI GPT-4o | Model sub-node for validation |
+| 18 | Parse Validation Results | Code | Determines if refinement needed |
+| 19 | Needs Refinement? | If | Routes to refinement loop or final output |
+| 20 | Auto-Refinement Chain | LangChain LLM Chain | Orchestrates the auto-refinement AI call |
+| 21 | Anthropic: Auto-Refinement Model | Anthropic Claude | Model sub-node for auto-refinement |
+| 22 | Parse Refined Content | Code | Feeds back into validation loop |
+| 23 | Generate HTML Document | Code | Creates styled, print-ready HTML with cover page |
+| 24 | Respond With HTML File | Webhook Response | Returns downloadable HTML binary |
 
 ## Core Principles
 
