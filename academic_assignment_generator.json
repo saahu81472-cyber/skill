@@ -29,6 +29,7 @@
     {
       "parameters": {
         "operation": "text",
+        "binaryPropertyName": "Assignment Brief",
         "options": {}
       },
       "id": "node-extract-file",
