@@ -28,15 +28,24 @@
     },
     {
       "parameters": {
+        "jsCode": "// Remap binary field from Form Trigger output to 'data' for Extract From File\nconst items = $input.all();\nconst result = [];\nfor (const item of items) {\n  const binary = item.binary || {};\n  if (binary['data']) {\n    // Already has 'data' field, pass through as-is\n    result.push({ json: item.json, binary });\n  } else if (binary['Assignment Brief']) {\n    // Remap the expected Form Trigger field to 'data'\n    result.push({ json: item.json, binary: { data: binary['Assignment Brief'] } });\n  } else {\n    // Fallback: try the first available binary field\n    const keys = Object.keys(binary);\n    if (keys.length === 0) {\n      throw new Error('No file was uploaded. Please upload a PDF, DOCX, or TXT file.');\n    }\n    result.push({ json: item.json, binary: { data: binary[keys[0]] } });\n  }\n}\nreturn result;"
+      },
+      "id": "node-prepare-binary",
+      "name": "Prepare Binary Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
         "operation": "text",
-        "binaryPropertyName": "Assignment Brief",
         "options": {}
       },
       "id": "node-extract-file",
       "name": "Extract From File",
       "type": "n8n-nodes-base.extractFromFile",
       "typeVersion": 1,
-      "position": [440, 300]
+      "position": [660, 300]
     },
     {
       "parameters": {
@@ -46,7 +55,7 @@
       "name": "Consolidate Brief Text",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 300]
+      "position": [880, 300]
     },
     {
       "parameters": {
@@ -378,6 +387,9 @@
   ],
   "connections": {
     "Form Trigger": {
+      "main": [[{"node": "Prepare Binary Data", "type": "main", "index": 0}]]
+    },
+    "Prepare Binary Data": {
       "main": [[{"node": "Extract From File", "type": "main", "index": 0}]]
     },
     "Extract From File": {
